@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@xyflow/react": "^12.10.0",
+    "react-mermaid": "^0.1.3"
+  }
+}
