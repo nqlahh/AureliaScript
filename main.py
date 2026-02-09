@@ -133,7 +133,7 @@ with tab3:
     if not generate:
         st.stop()
 
-    col_code, col_mermaid, col_preview = st.columns([1, 1, 1.6])
+    col_mermaid, col_preview = st.columns([1, 1.6])
 
     # --------------------------
     # COLUMN 1 — MERMAID SOURCE
