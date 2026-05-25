@@ -1,2 +1,4 @@
 openai>=1.30.0
 streamlit
+chromadb>=0.4.0
+mcp>=1.0.0
