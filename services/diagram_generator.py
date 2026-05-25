@@ -55,6 +55,30 @@ class UseCaseDiagramStrategy(DiagramStrategy):
 
 
 # ===============================
+# SEQUENCE DIAGRAM
+# ===============================
+
+class SequenceDiagramStrategy(DiagramStrategy):
+    def diagram_header(self):
+        return "sequenceDiagram"
+
+    def get_prompt(self, code_context):
+        return f"{DIAGRAM_RULES['SEQUENCE_DIAGRAM']}\n\nCODE CONTEXT:\n{code_context}"
+
+
+# ===============================
+# ACTIVITY DIAGRAM
+# ===============================
+
+class ActivityDiagramStrategy(DiagramStrategy):
+    def diagram_header(self):
+        return "flowchart TD"
+
+    def get_prompt(self, code_context):
+        return f"{DIAGRAM_RULES['ACTIVITY_DIAGRAM']}\n\nCODE CONTEXT:\n{code_context}"
+
+
+# ===============================
 # FACTORY
 # ===============================
 
@@ -67,6 +91,10 @@ class DiagramFactory:
             return ERDDiagramStrategy()
         if "Use Case" in selection:
             return UseCaseDiagramStrategy()
+        if "Sequence" in selection:
+            return SequenceDiagramStrategy()
+        if "Activity" in selection:
+            return ActivityDiagramStrategy()
         return ClassDiagramStrategy()
 
 
@@ -75,19 +103,11 @@ class DiagramFactory:
 # ===============================
 
 def extract_mermaid(text: str) -> str:
-    """
-    Extract Mermaid code if wrapped in ``` blocks,
-    otherwise return raw text.
-    """
     blocks = re.findall(r"```(?:mermaid)?\s*(.*?)```", text, re.DOTALL)
     return blocks[0].strip() if blocks else text.strip()
 
 
 def clean_mermaid_output(text: str) -> str:
-    """
-    Removes markdown fences and explanations
-    WITHOUT breaking Mermaid grammar.
-    """
     text = re.sub(r"```(?:mermaid)?", "", text)
     text = re.sub(r"```", "", text)
 
@@ -104,9 +124,6 @@ def clean_mermaid_output(text: str) -> str:
 
 
 def ensure_header(code: str, header: str) -> str:
-    """
-    Ensures Mermaid header appears exactly once at the top.
-    """
     lines = code.splitlines()
     cleaned = [line for line in lines if line.strip() != header]
     return header + "\n" + "\n".join(cleaned)
