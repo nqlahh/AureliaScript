@@ -23,7 +23,7 @@ DOCUMENT THIS CODE BASED ON THE CONTEXT BELOW:
 """
             }
         ],
-        temperature=0.3
+        temperature=0
     )
 
     return response.choices[0].message.content
