@@ -81,7 +81,6 @@ class SessionStore:
     def save_conversation_turn(self, session_id: str, user_msg: str, assistant_msg: str):
         self.save_message(session_id, "user", user_msg)
         self.save_message(session_id, "assistant", assistant_msg)
-
     # ── Code Content Storage ────────────────────────────────────
 
     def save_code_content(self, session_id: str, code_content: str):
@@ -97,7 +96,7 @@ class SessionStore:
         timestamp = datetime.now().isoformat()
         msg_id = f"{session_id}_code_{uuid.uuid4().hex[:8]}"
         self.collection.upsert(
-            documents=[code_content[:50000]],
+            documents=[code_content[:200000]],  # ← Increased from 50000 to 200000
             metadatas=[{
                 "session_id": session_id,
                 "role": "system_code",
