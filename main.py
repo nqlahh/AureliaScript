@@ -3,6 +3,9 @@ import os
 import streamlit as st
 import streamlit.components.v1 as components
 import uuid
+import zipfile
+import io  # Moved to top
+
 from services.session_store import SessionStore
 from services.questions import get_answer
 
@@ -141,17 +144,7 @@ with st.sidebar:
                     label = f"📅 {ts} ({msg_count} msgs)"
 
                 with st.expander(label):
-                    if st.button("👁️ View", key=f"view_{s['session_id']}"):
-                        history = store.get_session(s["session_id"])
-                        for msg in history:
-                            if msg["role"] not in ["system_code", "system_filename"]:
-                                icon = "🧑" if msg["role"] == "user" else "🤖"
-                                st.markdown(
-                                    f"{icon} **{msg['role'].title()}:** "
-                                    f"{msg['content'][:200]}"
-                                )
-
-                    col_resume, col_delete = st.columns([3, 1])
+                    col_resume, col_delete = st.columns([2, 1])
                     with col_resume:
                         if st.button("▶️ Resume", key=f"resume_{s['session_id']}", use_container_width=True):
                             st.session_state.session_id = s["session_id"]
@@ -243,29 +236,27 @@ if "current_diagram_type" not in st.session_state:
     st.session_state.current_diagram_type = "Class Diagram"
 
 # ==========================
-# FILE UPLOAD (MULTI-LANGUAGE)
+# FILE UPLOAD (MULTI-LANGUAGE + ZIP SUPPORT)
 # ==========================
 st.header("📄 Upload Source Code")
 
-# Supported file extensions (used for validation & syntax highlighting only)
 SUPPORTED_EXTENSIONS = {
     "py", "js", "ts", "jsx", "tsx", "java", "c", "cpp", "h", "hpp",
     "cs", "go", "rs", "rb", "php", "swift", "kt", "html", "css",
     "sql", "sh", "yaml", "yml", "json", "xml", "md", "r", "scala",
     "lua", "dart", "vue", "svelte", "toml", "ini", "cfg", "env",
-    "txt", "bat", "ps1", "makefile", "dockerfile", "gitignore",
+    "txt", "bat", "ps1", "makefile", "dockerfile", "gitignore", "zip",
 }
 
-# No 'type' parameter = Streamlit won't show the long extension list in the UI
 uploaded_file = st.file_uploader("Choose a source code file")
 
 if uploaded_file:
-    # Check if the file extension is recommended
     ext = uploaded_file.name.rsplit('.', 1)[-1].lower() if '.' in uploaded_file.name else ""
+            
+    # ── HANDLE SINGLE FILES ──
     if ext not in SUPPORTED_EXTENSIONS:
         st.warning(f"⚠️ `.{ext}` is not a common source code file. Attempting to read anyway...")
 
-    # Try to read the file (catches binary files like .exe, .png, .zip)
     try:
         code_content = uploaded_file.read().decode("utf-8")
         st.session_state.code_content = code_content
@@ -275,7 +266,7 @@ if uploaded_file:
             store.save_code_content(st.session_state.session_id, code_content)
             store.save_metadata(st.session_state.session_id, "system_filename", uploaded_file.name)
     except UnicodeDecodeError:
-        st.error("❌ Cannot read this file. It appears to be a binary file (e.g., image, executable, zip). Please upload a text-based source code file.")
+        st.error("❌ Cannot read this file. It appears to be a binary file. Please upload a text-based source code file.")
         code_content = ""
 
 elif st.session_state.code_content:
@@ -285,12 +276,27 @@ else:
 
 if code_content:
     lang = get_language_from_filename(st.session_state.get("uploaded_filename", ""))
-    with st.expander(f"📂 View Uploaded Code ({lang})"):
-        st.code(code_content, language=lang)
+    display_lang = "text" if lang == "zip" else lang
+    with st.expander(f"📂 View Uploaded Code ({len(code_content)} characters)"):
+        st.code(code_content, language=display_lang, height=400)
 
 # ==========================
 # TABS
 # ==========================
+st.markdown("""
+<style>
+    /* Center the tabs container */
+    div[data-baseweb="tab-list"] {
+        justify-content: center;
+    }
+    /* Increase the font size of the tab buttons */
+    button[data-baseweb="tab"] {
+        font-size: 1.3rem; /* Makes the text bigger */
+        font-weight: 600;  /* Makes it slightly bolder */
+    }
+</style>
+""", unsafe_allow_html=True)
+
 tab1, tab2, tab3 = st.tabs(["💬 Chat", "📝 Documentation", "📊 Diagrams"])
 
 # ==========================
@@ -299,10 +305,29 @@ tab1, tab2, tab3 = st.tabs(["💬 Chat", "📝 Documentation", "📊 Diagrams"])
 with tab1:
     st.header("Chat with Code")
 
+    # Render chat history (User is right-aligned, Assistant is left-aligned natively)
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
+    # ── AUTO-SCROLL TO BOTTOM (The "WhatsApp" feel) ──
+    # This script runs every time the chat updates, scrolling the user's view to the latest message.
+    components.html(
+        """
+        <script>
+            function scrollToBottom() {
+                var main = window.parent.document.querySelector('section.main');
+                if (main) {
+                    main.scrollTo({ top: main.scrollHeight, behavior: 'smooth' });
+                }
+            }
+            setTimeout(scrollToBottom, 100); // Small delay ensures DOM is fully loaded
+        </script>
+        """,
+        height=0  # Set to 0 so it takes up no visual space on the screen
+    )
+
+    # Chat input (pinned to bottom natively by Streamlit)
     if prompt := st.chat_input("Ask something about the code..."):
         if not code_content:
             st.warning("Upload a file first.")
@@ -323,6 +348,9 @@ with tab1:
                 st.markdown(answer)
 
             st.session_state.messages.append({"role": "assistant", "content": answer})
+            
+            # Rerun to trigger the scroll script above with the new message
+            st.rerun()
 
 # ==========================
 # TAB 2 — DOCUMENTATION
@@ -391,21 +419,25 @@ with tab3:
                 st.session_state.mermaid_analysis = analysis
                 st.session_state.mermaid_code = clean_mermaid
 
+        # FIX: This entire block is now safely indented INSIDE `with tab3:`
         if st.session_state.mermaid_code:
             with st.container():
                 col_code, col_preview = st.columns([1, 1], gap="small")
 
                 with col_code:
-                    st.write("💻 **Mermaid Source**")
-                    st.code(
-                        st.session_state.mermaid_code,
-                        language="markdown",
+                    st.write("💻 **Mermaid Source (Editable)**")
+                    st.caption("⚠️ If the diagram fails to render, fix syntax errors here and press `Ctrl+Enter` to update the preview.")
+                    
+                    edited_code = st.text_area(
+                        "Mermaid Code Editor",
+                        value=st.session_state.mermaid_code,
                         height=750,
+                        label_visibility="collapsed"
                     )
-
-                    if st.session_state.mermaid_analysis:
-                        with st.expander("🧠 AI Analysis"):
-                            st.markdown(st.session_state.mermaid_analysis)
+                    
+                    if edited_code != st.session_state.mermaid_code:
+                        st.session_state.mermaid_code = edited_code
+                        st.rerun()
 
                 with col_preview:
                     st.write("👁️ **Live Preview**")
@@ -472,9 +504,10 @@ function exportSVG() {{
     const blob = new Blob([source], {{type: 'image/svg+xml;charset=utf-8'}});
     download(URL.createObjectURL(blob), 'diagram.svg');
 }}
+
 function exportPNG() {{
     const svg = document.querySelector('#diagram-{unique_id} svg');
-    if (!svg) return;
+    if (!svg) return alert("Error: SVG structure not found yet.");
     const serializer = new XMLSerializer();
     const svgStr = serializer.serializeToString(svg);
     const img = new Image();
@@ -485,34 +518,60 @@ function exportPNG() {{
     img.onload = function() {{
         const bbox = svg.getBBox();
         const padding = 20;
-        const scale = 2;
+        const scale = 2; // High DPI Scale fallback
         let width = bbox.width + padding * 2;
         let height = bbox.height + padding * 2;
-        if (svg.viewBox.baseVal) {{ width = svg.viewBox.baseVal.width; height = svg.viewBox.baseVal.height; }}
+        
+        if (svg.viewBox && svg.viewBox.baseVal) {{ 
+            width = svg.viewBox.baseVal.width || width; 
+            height = svg.viewBox.baseVal.height || height; 
+        }}
+        
         canvas.width = width * scale;
         canvas.height = height * scale;
         ctx.fillStyle = 'white';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.scale(scale, scale);
-        ctx.drawImage(img, 0, 0, width, height);
+        ctx.drawImage(img, padding, padding, width - padding*2, height - padding*2);
         download(canvas.toDataURL('image/png'), 'diagram.png');
         URL.revokeObjectURL(url);
     }};
-    img.onerror = function() {{ console.error("Error loading SVG"); URL.revokeObjectURL(url); }}
+    img.onerror = function() {{ alert("Failed to convert image layout."); URL.revokeObjectURL(url); }}
     img.src = url;
 }}
+
 function download(url, filename) {{
     const a = document.createElement('a');
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    a.href = url; 
+    a.download = filename;
+    a.target = '_blank'; // Prevents some sandbox environment blocks
+    document.body.appendChild(a); 
+    a.click(); 
+    document.body.removeChild(a);
 }}
+
+// Initialize observer
 const observer = new MutationObserver(() => {{
     const svg = document.querySelector('#diagram-{unique_id} svg');
-    if (svg && !panZoom) {{ setTimeout(initPanZoom, 100); observer.disconnect(); }}
+    if (svg && !panZoom) {{
+        setTimeout(initPanZoom, 100);
+        observer.disconnect();
+    }}
 }});
 observer.observe(document.getElementById('diagram-{unique_id}'), {{ childList: true, subtree: true }});
+
 </script>
 </body>
 </html>
 """
                     components.html(html, height=790, scrolling=False)
+
+                    st.write("---")
+                    st.caption("📥 Browser blocking the buttons inside the preview pane? Download raw script below:")
+                    st.download_button(
+                        label="💾 Download Raw Mermaid Text Script (.mmd)",
+                        data=st.session_state.mermaid_code,
+                        file_name="diagram.mmd",
+                        mime="text/plain",
+                        use_container_width=True
+                    )
