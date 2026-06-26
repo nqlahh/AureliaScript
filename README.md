@@ -1,3 +1,9 @@
+Your README is already very good, but it needs a few minor updates to perfectly match the latest changes we made to the code (specifically the ZIP upload feature, the editable diagram text area, the `pydantic-settings` requirement, and the new "WhatsApp-style" auto-scroll chat).
+
+Here is the updated and fully aligned version:
+
+---
+
 # AureliaScript: AI-Powered Code Intelligence
 
 > An AI-powered code intelligence platform that transforms source code into structured documentation, interactive diagrams, and insightful chat conversations.
@@ -29,7 +35,7 @@ Whether you're onboarding onto a legacy codebase, auditing architecture, or gene
 
 ## Key Features
 
-* **💬 Chat with Code**: Context-aware AI assistant that answers specific questions about your uploaded logic. Powered by RAG (Retrieval-Augmented Generation) to ensure responses are grounded in your actual source code.
+* **💬 Chat with Code**: Context-aware AI assistant that answers specific questions about your uploaded logic. Powered by RAG (Retrieval-Augmented Generation) to ensure responses are grounded in your actual source code. Features a "WhatsApp-style" chat interface with right-aligned user messages and auto-scrolling.
 * **📝 Documentation Generator**: Produces professional Markdown documentation following strict technical writing standards. The AI adopts a "Professional Technical Writer" persona, enforcing header hierarchies, table structures, and code block conventions.
 * **📊 Interactive Diagrams**: Generates Mermaid.js visualizations including:
   * **Class Diagrams**: For structural analysis and object-oriented design mapping.
@@ -37,10 +43,10 @@ Whether you're onboarding onto a legacy codebase, auditing architecture, or gene
   * **Use Case Diagrams**: For functional flow overview and actor interaction mapping.
   * **Sequence Diagrams**: For message flow tracing between components and API interactions.
   * **Activity Diagrams**: For control flow visualization, decision logic, and process steps.
-* **👁️ Live Preview**: A custom-built SVG viewer with pan, zoom, and export (PNG/SVG) capabilities.
-* **🕐 Session Management**: Persistent chat history with semantic search. Resume past sessions with full code and conversation context restored.
-* **🔌 MCP Integration**: The AI assistant autonomously retrieves past conversation context through standardized Model Context Protocol tool calls.
-* **🌐 Multi-Language Support**: Accepts source code in 30+ programming languages including Python, JavaScript, TypeScript, Java, C++, Go, Rust, and more.
+* **👁️ Live Preview & Editable Source**: A custom-built SVG viewer with pan, zoom, and export (PNG/SVG) capabilities. The Mermaid source code is fully editable in the UI, allowing users to manually fix minor AI syntax errors and instantly re-render the preview.
+* **🕐 Session Management**: Persistent chat history with semantic search. Resume past sessions with full code and conversation context restored without needing to re-upload files.
+* **🔌 MCP Integration**: The AI assistant autonomously retrieves past conversation context through standardized Model Context Protocol (MCP) tool calls.
+* **🌐 Multi-Language & ZIP Support**: Accepts single source code files in 30+ programming languages, or entire project repositories packaged as `.zip` archives.
 
 ## Architecture
 
@@ -66,8 +72,9 @@ cd aureliascript
 
 2. **Install dependencies**:
 ```bash
-pip install -r requirement.txt
+pip install -r requirements.txt
 ```
+*(Note: `requirements.txt` includes `openai`, `streamlit`, `chromadb`, `mcp`, and `pydantic-settings`)*
 
 3. **Configure API key (optional — for "Use default key" feature)**:
 
@@ -97,7 +104,7 @@ The application relies on a `config.py` file to manage its behavior. You can adj
 
 * `OPENAI_MODEL`: Set your preferred model (default: `gpt-4o-mini`).
 * `DOC_STRUCTURE_RULES`: Defines the "Professional Technical Writer" persona and formatting constraints for the documentation engine.
-* `DIAGRAM_RULES`: Contains prompt templates for each diagram type (`CLASS_DIAGRAM`, `ERD_DIAGRAM`, `USE_CASE_DIAGRAM`, `SEQUENCE_DIAGRAM`, `ACTIVITY_DIAGRAM`).
+* `DIAGRAM_RULES`: Contains prompt templates and few-shot examples for each diagram type (`CLASS_DIAGRAM`, `ERD_DIAGRAM`, `USE_CASE_DIAGRAM`, `SEQUENCE_DIAGRAM`, `ACTIVITY_DIAGRAM`).
 * `SESSION_DATA_DIR`: ChromaDB persistence directory for session logs and code storage (default: `./session_data`).
 
 ## Usage
@@ -106,15 +113,15 @@ The application relies on a `config.py` file to manage its behavior. You can adj
    * **Use your own OpenAI key** — Paste your key directly.
    * **Use default key** — Loads from the `OPENAI_API_KEY` environment variable.
 
-2. **Upload**: Provide a source code file for analysis (`.py`, `.js`, `.java`, `.go`, `.rs`, `.cpp`, etc.).
+2. **Upload**: Provide a source code file (`.py`, `.js`, `.java`, etc.) or a `.zip` archive containing multiple project files. Extracted ZIP files are automatically concatenated with file-path headers for AI context.
 
 3. **Interact**:
    * Use the **Chat** tab to ask *"What does this function do?"* or *"What did we discuss about authentication last time?"*
    * Use the **Documentation** tab to generate a full README-style guide.
-   * Use the **Diagrams** tab to visualize class structures, data relationships, message flows, and control logic.
+   * Use the **Diagrams** tab to visualize class structures, data relationships, message flows, and control logic. Edit the Mermaid source directly in the left panel if needed.
 
 4. **Session Management**:
-   * **Resume** past sessions to restore chat history and uploaded code.
+   * **Resume** past sessions from the sidebar to restore chat history and uploaded code.
    * **Search** across all past conversations using natural language.
    * **Delete** individual sessions to manage storage.
 
@@ -157,11 +164,12 @@ ChromaDB-backed persistent storage for session logs, uploaded code, and metadata
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
 | `create_session()` | — | `str` | Creates a new session ID |
-| `list_sessions()` | — | `List[Dict]` | Lists all sessions with metadata |
+| `list_sessions()` | — | `List[Dict]` | Lists all sessions with metadata (including filenames) |
 | `delete_session(session_id)` | `str` | `bool` | Deletes a session and all associated data |
 | `save_conversation_turn(session_id, user_msg, assistant_msg)` | `str, str, str` | — | Saves a complete chat turn |
-| `save_code_content(session_id, code_content)` | `str, str` | — | Persists uploaded source code for a session |
+| `save_code_content(session_id, code_content)` | `str, str` | — | Persists uploaded source code (up to 200k chars) |
 | `get_code_content(session_id)` | `str` | `str` | Retrieves the uploaded code for a session |
+| `save_metadata(session_id, key, value)` | `str, str, str` | — | Saves metadata (e.g., `system_filename`) |
 | `search_sessions(query, n_results)` | `str, int` | `List[Dict]` | Semantic search across all sessions |
 
 ### DiagramFactory
@@ -193,7 +201,7 @@ ChromaDB uses a single persistent store (DuckDB + Parquet internally). There is 
 
 ### Data Isolation
 
-Each session is isolated via the `session_id` metadata filter. Uploaded code is stored with the `system_code` role, and filenames with `system_filename`, ensuring they are excluded from chat context and semantic search results.
+Each session is isolated via the `session_id` metadata filter (using `$and` operators). Uploaded code is stored with the `system_code` role, and filenames with `system_filename`, ensuring they are excluded from chat context and semantic search results.
 
 ## Supported Languages
 
@@ -206,7 +214,7 @@ AureliaScript accepts source code in the following languages:
 | **Mobile** | Swift, Kotlin, Dart |
 | **Data & Config** | SQL, YAML, TOML, JSON, XML, Markdown |
 | **Scripting** | Shell/Bash, PowerShell, Lua, R, Scala |
-| **Other** | Protocol Buffers, Dockerfile, .env, .gitignore |
+| **Other** | Protocol Buffers, Dockerfile, .env, .gitignore, ZIP Archives |
 
 Custom or unrecognized file extensions are read as plain text with a warning.
 
@@ -215,11 +223,12 @@ Custom or unrecognized file extensions are read as plain text with a warning.
 | Issue | Solution |
 | --- | --- |
 | `pip is not recognized` | Use `python -m pip install ...` or `py -3.12 -m pip install ...` |
-| `PydanticImportError: BaseSettings` | Run `pip install pydantic-settings` |
+| `PydanticImportError: BaseSettings` | Run `pip install pydantic-settings` (already in requirements.txt) |
 | Python 3.14 compatibility errors | Install Python 3.12 and run with `py -3.12 -m streamlit run main.py` |
 | `OPENAI_API_KEY` not found | Ensure the environment variable is set and PowerShell has been restarted |
-| Diagrams fail to render | Check the Mermaid source in the left panel for syntax errors |
+| Diagrams fail to render | Edit the Mermaid source in the left panel to fix syntax errors, then press `Ctrl+Enter`. |
 | Session history shows "No file" | Sessions created before the filename feature was added will not display filenames. Delete old sessions and create new ones. |
+| ZIP file fails to upload | Ensure the archive is not corrupted and contains text-based source files, not binary files. |
 
 ## License
 
