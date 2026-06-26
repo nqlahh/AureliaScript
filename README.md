@@ -66,7 +66,7 @@ cd aureliascript
 
 2. **Install dependencies**:
 ```bash
-pip install -r requirements.txt
+pip install -r requirement.txt
 ```
 
 3. **Configure API key (optional — for "Use default key" feature)**:
