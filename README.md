@@ -72,7 +72,7 @@ cd aureliascript
 
 2. **Install dependencies**:
 ```bash
-pip install -r requirements.txt
+pip install -r requirement.txt
 ```
 *(Note: `requirements.txt` includes `openai`, `streamlit`, `chromadb`, `mcp`, and `pydantic-settings`)*
 
