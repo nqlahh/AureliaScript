@@ -1,243 +1,106 @@
-"""
-ChromaDB-backed session log store for chat conversations.
-
-Uses OpenAI embeddings explicitly to avoid ChromaDB's default
-ONNX model download (which causes httpx.ReadTimeout on first run).
-"""
-
-import os
-import uuid
-import chromadb
-from datetime import datetime
-from typing import List, Dict
-from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+from openai import OpenAI
 
 
-class SessionStore:
-    def __init__(self, persist_dir: str = "./session_data"):
-        # Initialise ChromaDB client
-        if persist_dir:
-            self.client = chromadb.PersistentClient(path=persist_dir)
-        else:
-            self.client = chromadb.Client()
+class VectorStore:
+    """
+    Simple vector store for RAG (Retrieval-Augmented Generation).
+    Uses OpenAI embeddings to store and retrieve relevant code chunks.
+    """
 
-        # Explicitly use OpenAI embeddings — prevents ChromaDB from
-        # falling back to ONNXMiniLM_L6_V2 and attempting a model download.
-        embedding_fn = OpenAIEmbeddingFunction(
-            api_key=os.getenv("OPENAI_API_KEY", ""),
-            model_name="text-embedding-3-small",
-        )
+    def __init__(self, api_key: str):
+        self.client = OpenAI(api_key=api_key)
+        self.chunks = []
+        self.embeddings = []
 
-        self.collection = self.client.get_or_create_collection(
-            name="session_logs",
-            embedding_function=embedding_fn,
-            metadata={"hnsw:space": "cosine"},
-        )
+    def build(self, code_content: str):
+        """
+        Splits code into chunks and generates embeddings for each chunk.
+        """
+        # Split code into logical chunks (functions, classes, etc.)
+        self.chunks = self._split_code(code_content)
 
-    # ── Session Management ──────────────────────────────────────
+        # Generate embeddings for each chunk
+        for chunk in self.chunks:
+            embedding = self._get_embedding(chunk)
+            self.embeddings.append(embedding)
 
-    def create_session(self) -> str:
-        session_id = (
-            f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            f"_{uuid.uuid4().hex[:6]}"
-        )
-        return session_id
+    def retrieve(self, query: str, top_k: int = 3) -> str:
+        """
+        Retrieves the most relevant chunks based on the query.
+        Returns concatenated context from top-k chunks.
+        """
+        if not self.chunks:
+            return ""
 
-    def list_sessions(self) -> List[Dict]:
-        results = self.collection.get(include=["documents", "metadatas"])
-        session_map = {}
+        # Get query embedding
+        query_embedding = self._get_embedding(query)
 
-        for doc, meta in zip(results["documents"], results["metadatas"]):
-            sid = meta["session_id"]
-            if sid not in session_map:
-                session_map[sid] = {
-                    "session_id": sid,
-                    "message_count": 0,
-                    "last_active": meta["timestamp"],
-                    "filename": None,
-                }
+        # Calculate similarity scores
+        similarities = []
+        for i, chunk_embedding in enumerate(self.embeddings):
+            similarity = self._cosine_similarity(query_embedding, chunk_embedding)
+            similarities.append((similarity, i))
 
-            # Only count actual chat messages (ignore system_code, system_filename)
-            if meta["role"] in ["user", "assistant"]:
-                session_map[sid]["message_count"] += 1
+        # Sort by similarity and get top-k
+        similarities.sort(reverse=True)
+        top_indices = [idx for _, idx in similarities[:top_k]]
 
-            if meta["timestamp"] > session_map[sid]["last_active"]:
-                session_map[sid]["last_active"] = meta["timestamp"]
+        # Concatenate relevant chunks
+        context = "\n\n".join([self.chunks[idx] for idx in top_indices])
+        return context
 
-            # Grab the saved filename
-            if meta["role"] == "system_filename" and doc:
-                session_map[sid]["filename"] = doc
+    def _split_code(self, code_content: str) -> list:
+        """
+        Splits code into chunks based on function/class definitions.
+        Falls back to paragraph-based splitting if no definitions found.
+        """
+        # Try to split by class/function definitions
+        chunks = []
+        lines = code_content.split("\n")
+        current_chunk = []
 
-        return sorted(
-            session_map.values(),
-            key=lambda x: x["last_active"],
-            reverse=True,
-        )
+        for line in lines:
+            if (line.strip().startswith("class ") or line.strip().startswith("def ")) and current_chunk:
+                chunks.append("\n".join(current_chunk))
+                current_chunk = [line]
+            else:
+                current_chunk.append(line)
 
-    def delete_session(self, session_id: str) -> bool:
-        results = self.collection.get(where={"session_id": session_id})
-        if results["ids"]:
-            self.collection.delete(ids=results["ids"])
-            return True
-        return False
+        if current_chunk:
+            chunks.append("\n".join(current_chunk))
 
-    # ── Message Storage ─────────────────────────────────────────
+        # Fallback: if no chunks found, split by paragraphs
+        if not chunks:
+            chunks = [paragraph.strip() for paragraph in code_content.split("\n\n") if paragraph.strip()]
 
-    def save_message(self, session_id: str, role: str, content: str):
-        timestamp = datetime.now().isoformat()
-        msg_id = f"{session_id}_{role}_{uuid.uuid4().hex[:8]}"
-        self.collection.upsert(
-            documents=[content[:8000]],
-            metadatas=[{
-                "session_id": session_id,
-                "role": role,
-                "timestamp": timestamp,
-            }],
-            ids=[msg_id],
-        )
+        return chunks if chunks else [code_content]
 
-    def save_conversation_turn(
-        self, session_id: str, user_msg: str, assistant_msg: str
-    ):
-        self.save_message(session_id, "user", user_msg)
-        self.save_message(session_id, "assistant", assistant_msg)
+    def _get_embedding(self, text: str) -> list:
+        """
+        Gets embeddings from OpenAI API.
+        """
+        try:
+            response = self.client.embeddings.create(
+                input=text,
+                model="text-embedding-3-small"
+            )
+            return response.data[0].embedding
+        except Exception:
+            # Fallback: return a zero vector if API call fails
+            return [0.0] * 1536
 
-    # ── Code Content Storage ────────────────────────────────────
+    def _cosine_similarity(self, vec1: list, vec2: list) -> float:
+        """
+        Calculates cosine similarity between two vectors.
+        """
+        if not vec1 or not vec2:
+            return 0.0
 
-    def save_code_content(self, session_id: str, code_content: str):
-        # Remove any existing code entry for this session first
-        results = self.collection.get(
-            where={"$and": [
-                {"session_id": session_id},
-                {"role": "system_code"},
-            ]}
-        )
-        if results["ids"]:
-            self.collection.delete(ids=results["ids"])
+        dot_product = sum(a * b for a, b in zip(vec1, vec2))
+        magnitude1 = (sum(a ** 2 for a in vec1)) ** 0.5
+        magnitude2 = (sum(b ** 2 for b in vec2)) ** 0.5
 
-        timestamp = datetime.now().isoformat()
-        msg_id = f"{session_id}_code_{uuid.uuid4().hex[:8]}"
-        self.collection.upsert(
-            documents=[code_content[:200000]],
-            metadatas=[{
-                "session_id": session_id,
-                "role": "system_code",
-                "timestamp": timestamp,
-            }],
-            ids=[msg_id],
-        )
+        if magnitude1 == 0 or magnitude2 == 0:
+            return 0.0
 
-    def get_code_content(self, session_id: str) -> str:
-        results = self.collection.get(
-            where={"$and": [
-                {"session_id": session_id},
-                {"role": "system_code"},
-            ]},
-            include=["documents"],
-        )
-        if results["documents"]:
-            return results["documents"][0]
-        return ""
-
-    # ── Generic Metadata Storage (filename, etc.) ───────────────
-
-    def save_metadata(self, session_id: str, key: str, value: str):
-        """Save a metadata value (like filename) for a session."""
-        results = self.collection.get(
-            where={"$and": [
-                {"session_id": session_id},
-                {"role": key},
-            ]}
-        )
-        if results["ids"]:
-            self.collection.delete(ids=results["ids"])
-
-        timestamp = datetime.now().isoformat()
-        msg_id = f"{session_id}_{key}_{uuid.uuid4().hex[:8]}"
-        self.collection.upsert(
-            documents=[value[:1000]],
-            metadatas=[{
-                "session_id": session_id,
-                "role": key,
-                "timestamp": timestamp,
-            }],
-            ids=[msg_id],
-        )
-
-    def get_metadata(self, session_id: str, key: str) -> str:
-        """Retrieve a metadata value for a session."""
-        results = self.collection.get(
-            where={"$and": [
-                {"session_id": session_id},
-                {"role": key},
-            ]},
-            include=["documents"],
-        )
-        if results["documents"]:
-            return results["documents"][0]
-        return ""
-
-    # ── Retrieval ───────────────────────────────────────────────
-
-    def get_session(self, session_id: str) -> List[Dict]:
-        results = self.collection.get(
-            where={"session_id": session_id},
-            include=["documents", "metadatas"],
-        )
-        messages = []
-        if results["documents"]:
-            for doc, meta in zip(results["documents"], results["metadatas"]):
-                messages.append({
-                    "role": meta["role"],
-                    "content": doc,
-                    "timestamp": meta["timestamp"],
-                })
-        messages.sort(key=lambda x: x["timestamp"])
-        return messages
-
-    def search_sessions(self, query: str, n_results: int = 5) -> List[Dict]:
-        count = self.collection.count()
-        if count == 0:
-            return []
-        n_results = min(n_results, count)
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=n_results,
-            include=["documents", "metadatas", "distances"],
-        )
-        matches = []
-        if results["documents"] and results["documents"][0]:
-            for doc, meta, dist in zip(
-                results["documents"][0],
-                results["metadatas"][0],
-                results["distances"][0],
-            ):
-                matches.append({
-                    "content": doc,
-                    "session_id": meta["session_id"],
-                    "role": meta["role"],
-                    "timestamp": meta["timestamp"],
-                    "relevance": round(1 - dist, 4),
-                })
-        return matches
-
-    def get_recent_context(self, session_id: str, n_messages: int = 6) -> str:
-        messages = self.get_session(session_id)
-        messages = [
-            m for m in messages
-            if m["role"] not in ["system_code", "system_filename"]
-        ]
-        recent = messages[-n_messages:] if len(messages) > n_messages else messages
-        parts = [f"[{m['role'].upper()}]: {m['content'][:500]}" for m in recent]
-        return "\n\n".join(parts)
-
-    # ── Stats ───────────────────────────────────────────────────
-
-    def get_stats(self) -> Dict:
-        count = self.collection.count()
-        sessions = self.list_sessions()
-        return {
-            "total_messages": count,
-            "total_sessions": len(sessions),
-            "collection_name": self.collection.name,
-        }
+        return dot_product / (magnitude1 * magnitude2)
