@@ -465,8 +465,8 @@ html, body {{ margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden
 .toolbar {{ height: 40px; padding: 6px; display: flex; align-items: center; gap: 6px; background: #fafafa; border-bottom: 1px solid #ddd; }}
 .toolbar button {{ background: white; border: 1px solid #ccc; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 14px; }}
 .toolbar button:hover {{ background: #e6e6e6; }}
-.mermaid {{ flex: 1; width: 100%; overflow: hidden; display: flex; justify-content: center; align-items: center; padding: 10px; }}
-.mermaid svg {{ width: 100% !important; height: 100% !important; }}
+.mermaid {{ flex: 1; width: 100%; height: 100%; overflow: hidden; position: relative; padding: 10px; box-sizing: border-box; }}
+.mermaid svg {{ display: block; }}
 </style>
 </head>
 <body>
@@ -488,8 +488,39 @@ let panZoom = null;
 function initPanZoom() {{
     const svg = document.querySelector('#diagram-{unique_id} svg');
     if (!svg) return;
+    svg.style.width = '100%';
+    svg.style.height = '100%';
     svg.addEventListener("wheel", function(e) {{ if (e.ctrlKey) {{ e.preventDefault(); }} }}, {{ passive: false }});
-    panZoom = svgPanZoom(svg, {{ zoomEnabled: true, fit: true, center: true, minZoom: 0.1, maxZoom: 10 }});
+
+    panZoom = svgPanZoom(svg, {{
+        zoomEnabled: true,
+        panEnabled: true,
+        controlIconsEnabled: false,
+        fit: true,
+        center: true,
+        minZoom: 0.1,
+        maxZoom: 10,
+        mouseWheelZoomEnabled: true,
+        dblClickZoomEnabled: true
+    }});
+
+    // Re-fit once layout has fully settled (fixes wrong initial fit/center)
+    setTimeout(() => {{
+        if (panZoom) {{
+            panZoom.resize();
+            panZoom.fit();
+            panZoom.center();
+        }}
+    }}, 100);
+
+    // Keep it correctly fit if the iframe/container resizes
+    window.addEventListener('resize', () => {{
+        if (panZoom) {{
+            panZoom.resize();
+            panZoom.fit();
+            panZoom.center();
+        }}
+    }});
 }}
 function zoomIn() {{ panZoom?.zoomIn(); }}
 function zoomOut() {{ panZoom?.zoomOut(); }}
@@ -508,36 +539,45 @@ function exportSVG() {{
 function exportPNG() {{
     const svg = document.querySelector('#diagram-{unique_id} svg');
     if (!svg) return alert("Error: SVG structure not found yet.");
-    const serializer = new XMLSerializer();
-    const svgStr = serializer.serializeToString(svg);
-    const img = new Image();
-    const svgBlob = new Blob([svgStr], {{type: 'image/svg+xml;charset=utf-8'}});
-    const url = URL.createObjectURL(svgBlob);
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    img.onload = function() {{
-        const bbox = svg.getBBox();
-        const padding = 20;
-        const scale = 2; // High DPI Scale fallback
-        let width = bbox.width + padding * 2;
-        let height = bbox.height + padding * 2;
-        
-        if (svg.viewBox && svg.viewBox.baseVal) {{ 
-            width = svg.viewBox.baseVal.width || width; 
-            height = svg.viewBox.baseVal.height || height; 
-        }}
-        
-        canvas.width = width * scale;
-        canvas.height = height * scale;
-        ctx.fillStyle = 'white';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.scale(scale, scale);
-        ctx.drawImage(img, padding, padding, width - padding*2, height - padding*2);
-        download(canvas.toDataURL('image/png'), 'diagram.png');
-        URL.revokeObjectURL(url);
-    }};
-    img.onerror = function() {{ alert("Failed to convert image layout."); URL.revokeObjectURL(url); }}
-    img.src = url;
+    try {{
+        const clone = svg.cloneNode(true);
+        if (!clone.getAttribute('xmlns')) {{ clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg'); }}
+        const serializer = new XMLSerializer();
+        const svgStr = serializer.serializeToString(clone);
+        const base64 = btoa(unescape(encodeURIComponent(svgStr)));
+        const img = new Image();
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        img.onload = function() {{
+            try {{
+                const bbox = svg.getBBox();
+                const padding = 20;
+                const scale = 2;
+                let width = bbox.width + padding * 2;
+                let height = bbox.height + padding * 2;
+
+                if (svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width) {{
+                    width = svg.viewBox.baseVal.width;
+                    height = svg.viewBox.baseVal.height;
+                }}
+
+                canvas.width = width * scale;
+                canvas.height = height * scale;
+                ctx.fillStyle = 'white';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.scale(scale, scale);
+                ctx.drawImage(img, padding, padding, width - padding * 2, height - padding * 2);
+                download(canvas.toDataURL('image/png'), 'diagram.png');
+            }} catch (drawErr) {{
+                alert("PNG export failed while drawing: " + drawErr.message);
+            }}
+        }};
+        img.onerror = function() {{ alert("Failed to load SVG as image for PNG conversion."); }};
+        img.src = 'data:image/svg+xml;base64,' + base64;
+    }} catch (err) {{
+        alert("PNG export failed: " + err.message);
+    }}
 }}
 
 function download(url, filename) {{
